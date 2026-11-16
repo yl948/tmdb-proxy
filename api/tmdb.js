@@ -1,5 +1,6 @@
 const axios = require('axios');
 const TMDB_BASE_URL = 'https://api.themoviedb.org';
+const IMAGE_BASE_URL = 'https://image.tmdb.org';
 
 // 创建缓存对象
 const cache = new Map();
@@ -49,7 +50,16 @@ module.exports = async (req, res) => {
     }
 
     try {
-        const fullPath = req.url;
+        const fullPath = req.url || '/';
+        const pathname = fullPath.split('?')[0];
+
+        // Vercel 的外部 rewrite 会 307 跳到 image.tmdb.org，不再把图片字节代理回来。
+        // 图片改由函数拉取并流式返回，响应体限制不适用于流式响应。
+        if (pathname === '/t/p' || pathname.startsWith('/t/p/')) {
+            await proxyImage(req, res, fullPath);
+            return;
+        }
+
         const authHeader = req.headers.authorization;
 
         // 缓存键只使用请求路径
@@ -100,9 +110,65 @@ module.exports = async (req, res) => {
         res.status(response.status).json(response.data);
     } catch (error) {
         console.error('TMDB API error:', error);
+        if (res.headersSent) {
+            res.end();
+            return;
+        }
         res.status(error.response?.status || 500).json({
             error: error.message,
             details: error.response?.data
         });
     }
-}; 
+};
+
+async function proxyImage(req, res, fullPath) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.setHeader('Allow', 'GET, HEAD, OPTIONS');
+        res.status(405).json({ error: 'Method not allowed' });
+        return;
+    }
+
+    const upstream = await axios({
+        method: req.method,
+        url: `${IMAGE_BASE_URL}${fullPath}`,
+        responseType: 'stream',
+        timeout: 20000,
+        maxRedirects: 5,
+        validateStatus: () => true,
+        headers: {
+            Accept: req.headers.accept || 'image/avif,image/webp,image/*,*/*'
+        }
+    });
+
+    res.status(upstream.status);
+    const contentType = upstream.headers['content-type'];
+    if (contentType) {
+        res.setHeader('Content-Type', contentType);
+    }
+    if (upstream.status === 200) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        res.setHeader('Vercel-CDN-Cache-Control', 'public, max-age=31536000');
+    } else {
+        res.setHeader('Cache-Control', 'public, max-age=60');
+    }
+
+    if (req.method === 'HEAD') {
+        upstream.data?.destroy?.();
+        res.end();
+        return;
+    }
+
+    await new Promise((resolve, reject) => {
+        let settled = false;
+        const done = (err) => {
+            if (settled) return;
+            settled = true;
+            if (err) reject(err);
+            else resolve();
+        };
+        upstream.data.on('error', done);
+        res.on('error', done);
+        res.on('finish', () => done());
+        upstream.data.pipe(res);
+    });
+}

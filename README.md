@@ -6,7 +6,7 @@
 
 
 ## 部署
-[![Vercel](https://vercel.com/button)](https://vercel.com/import/project?template=https://github.com/imaliang/tmdb-proxy)
+[![Vercel](https://vercel.com/button)](https://vercel.com/import/project?template=https://github.com/yl948/tmdb-proxy)
 
 
 ## 使用方法
@@ -20,6 +20,8 @@
     + 如果你没有域名，可以去 [腾讯云活动域名](https://curl.qcloud.com/ScJY3Hev) 注册一个，新用户1元1年。
 
 3. 你自己绑定的域名就是tmdb的代理域名，会代理 api.themoviedb.org 和 image.tmdb.org
+
+图片不要用 Vercel 外部 rewrite。那条路径现在会 307 跳回 `image.tmdb.org`，国内海报仍然打不开。`/t/p/*` 和 API 一样进函数，由函数把图片字节流式返回。
 
 ## 感谢
 
